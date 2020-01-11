@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>abstract</title>
+    <script src="http://libs.baidu.com/jquery/1.9.1/jquery.js"></script>
+</head>
+
+<body>
+<div id="form-div">
+    <form id="form1" onsubmit="return false" action="##" method="post">
+        <p>title: <input name="title" type="text" id="txtUserName" tabindex="1" style="width:350px; height:10px;" value=""/></p>
+        <p>content: <input name="content" type="text" id="TextBox2" tabindex="2" style="width:320px; height:250px;" value=""/></p>
+        <p><input type="button" value="submit" onclick="login()">
+    </form>
+    <div>
+        <textarea id="result" rows="10" cols="50"></textarea>
+    </div>
+
+</div>
+</body>
+
+<script>
+    function login() {
+            $.ajax({
+            //几个参数需要注意一下
+                type: "POST",//方法类型
+                dataType: "json",//预期服务器返回的数据类型
+                url: '/abstract',
+                data: $('#form1').serialize(),
+                success: function (result) {
+                    $('#result').val(JSON.stringify(result));
+                    console.log(result);//打印服务端返回的数据(调试用)
+                    if (result.resultCode == 200) {
+                        alert("SUCCESS");
+                    }
+                },
+                error : function() {
+                    alert("异常！");
+                }
+            });
+        }
+</script>
+</html>
