@@ -100,7 +100,6 @@ to_categorical = {
 
 word2vec = gensim.models.KeyedVectors.load_word2vec_format(word2vec_path, binary=True, unicode_errors='ignore')
 wv = word2vec.wv
-del word2vec
 
 columns = ['location_traffic_convenience',
    'location_distance_from_business_district', 'location_easy_to_find',
@@ -129,9 +128,154 @@ def get_predict_class(data, model, batch_size=1):  #(1, 450, 300)
         predict_truth_class.append(get_class(batch_result[i]))
     return predict_truth_class
 ##################################################### 项目三  ####################################################
-
-
 print(3)
+
+import json, pickle, jieba, random
+from scipy.spatial.distance import cosine
+from collections import Counter
+import numpy as np
+from gensim.models import Word2Vec
+from sklearn.decomposition import PCA
+
+
+sentence_index = pickle.load(open('sentence_index', 'rb'))
+word_index = pickle.load(open('word_index', 'rb'))
+bussiness_sentence_vec = pickle.load(open('bussiness_sentence_vec', 'rb'))
+content_dict = pickle.load(open('content_dict', 'rb'))
+u = pickle.load(open('u', 'rb'))
+word2vec = word2vec
+
+
+def cut_again(w, return_vec=True):
+    if w in word2vec.wv.vocab:
+        if return_vec:
+            return [word2vec.wv[w]]
+        return [w]
+    else:
+        for i in range(len(w) - 1):
+            i += 1
+            if w[:i] in word2vec.wv.vocab and w[i:] in word2vec.wv.vocab:
+                if return_vec:
+                    return [word2vec.wv[w[:i]], word2vec.wv[w[i:]]]
+                return [w[:i], w[i:]]
+        if return_vec:
+            return None
+        return None
+
+
+def get_sentence_vec_u(sentence, u):
+    def cut_again(w, return_vec=False):
+        if w in word2vec.wv.vocab:
+            if return_vec:
+                return [word2vec.wv[w]]
+            return [w]
+        else:
+            for i in range(len(w) - 1):
+                i += 1
+                if w[:i] in word2vec.wv.vocab and w[i:] in word2vec.wv.vocab:
+                    if return_vec:
+                        return [word2vec.wv[w[:i]], word2vec.wv[w[i:]]]
+                    return [w[:i], w[i:]]
+            if return_vec:
+                return None
+            return None
+
+    def get_sentence_vec(sentence_word_list, u, alpha=1e-3):
+        vlookup = word2vec.wv.vocab  # Gives us access to word index and count
+        vectors = word2vec.wv  # Gives us access to word vectors
+        size = word2vec.vector_size  # Embedding size
+        Z = 0
+        for k in vlookup:
+            Z += vlookup[k].count  # Compute the normalization constant Z
+        count = 0
+        v = np.zeros(size, dtype=np.float32)  # Summary vector
+        for w in sentence_word_list:
+            if w in vlookup:
+                v += (alpha / (alpha + (vlookup[w].count / Z))) * vectors[w]
+                count += 1
+        if count > 0:
+            v /= count
+        v -= np.multiply(np.multiply(u, u.T), v)
+        return v
+
+    s = []
+    for w in [e for e in jieba.lcut(sentence) if e not in stop_words]:
+        if w in word2vec.wv.vocab:
+            s.append(w)
+        else:
+            words = cut_again(w, False)
+            if words is not None:
+                s.extend(words)
+    sentence_vec = get_sentence_vec(s, u)
+
+    return sentence_vec
+
+
+def get_the_cluster_center(sentences):
+    v = np.zeros(sentences[0].shape)
+    for el in sentences:
+        v += el
+    v /= len(sentences)
+    return v
+
+
+def get_10_vec(sentence, sentence_index):
+    sentence_vec = get_sentence_vec_u(sentence, u)
+    while 1:
+        if type(sentence_index) == dict:
+            distance = sorted([(cosine(k, sentence_vec), v) for k, v in sentence_index.items()], key=lambda x: x[0])
+            sentence_index = distance[0][1]
+        else:
+            sentence_list = sentence_index  # [10, 24589, 24590, 26641, 20, 21, 22, 23, 24602, 24605, ...]
+            break
+    similarity_list = [(sentence_id, cosine(content_dict[sentence_id][1], sentence_vec)) for sentence_id in sentence_list]
+    similarity_list = sorted(similarity_list, key=lambda x: x[1])
+    similarity_list = similarity_list[:10]
+    similarity_list = [content_dict[i[0]] for i in similarity_list]
+    return similarity_list
+
+
+def get_10_word(sentence, word_index, n=10):
+    sentence = [el for el in jieba.lcut(sentence) if el not in stop_words]
+    similarity_sentences = set(sum([word_index[word] for word in sentence if word in word_index], []))  # {16015, 16016, 20495,..}
+    similarity_sentences = [content_dict[el] for el in similarity_sentences]
+    random.shuffle(similarity_sentences)
+    similarity_sentences = [(similarity_sentence, len(set(sentence) & set([el for el in jieba.lcut(similarity_sentence[0]) if el not in stop_words]))) for similarity_sentence in similarity_sentences]
+    similarity_sentences = sorted(similarity_sentences, key=lambda x: x[1])[:n]
+    similarity_sentences = [el[0] for el in similarity_sentences]
+    return similarity_sentences
+
+
+def get_1_from_20(vec_list, bool_list):
+    vec_list_sentence, bool_list_sentence = [el[0] for el in vec_list], [el[0] for el in bool_list]
+    common = set(vec_list_sentence) | set(bool_list_sentence)
+    if common:
+        for el in vec_list:
+            if el[0] in common:
+                return el[2]
+    return vec_list[0][2]
+
+
+def related_to_bussiness(sentence, sentence_index, bussiness_sentence_vec=bussiness_sentence_vec):
+    vec_list = list(sentence_index.keys())
+    vec_list2 = [cosine(vec, bussiness_sentence_vec) for vec in vec_list]
+    bussiness_sentence_vec = vec_list[vec_list2.index(min(vec_list2))]
+
+    sentence_vec = get_sentence_vec_u(sentence, u)
+    bussiness_cosine = cosine(sentence_vec, bussiness_sentence_vec)
+    others_cosine = [cosine(sentence_vec, vec) for vec in vec_list if vec != bussiness_sentence_vec]
+    if bussiness_cosine < min(others_cosine) and bussiness_cosine < 0.7:
+        return True
+    return False
+
+
+def get_random_answer(sentence):
+    return f'{sentence}这个问题我还需要再学习一下'
+
+##################################################### 项目四  ####################################################
+
+
+##################################################################################################################
 
 
 app = Flask(__name__)
@@ -191,6 +335,29 @@ def waimai_api():
     return json.dumps(result)
 
 ##################################################### 项目三  ####################################################
+
+@app.route('/bank')
+def bank():
+    return render_template("bank.html")
+
+@app.route('/bank_conversation', methods=['POST'])
+def bank_api():
+
+    print(4)
+    sentence = request.form['content']
+
+    b = related_to_bussiness(sentence, sentence_index, bussiness_sentence_vec=bussiness_sentence_vec)
+    if not b:
+        response = get_random_answer(sentence)
+    else:
+        response = get_1_from_20(get_10_vec(sentence, sentence_index), get_10_word(sentence, word_index, n=1000))
+
+    return json.dumps(response)
+
+##################################################### 项目四  ####################################################
+
+
+##################################################################################################################
 
 
 if __name__ == '__main__':
